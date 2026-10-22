@@ -1,6 +1,36 @@
 'use strict';
 
 /**
+ * Matches a value against a glob pattern.
+ * Supports `*` wildcards (any sequence of characters, including none).
+ * Case-insensitive.
+ *
+ * @param {string} pattern  e.g. "WIP*", "Archive", "*graveyard*", "*Archive*"
+ * @param {string} value
+ * @returns {boolean}
+ */
+function matchesGlob(pattern, value) {
+  if (!pattern || !value) return false;
+  // Escape regex metacharacters except *, then replace * with .*
+  const regexStr = pattern
+    .toLowerCase()
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*/g, '.*');
+  return new RegExp(`^${regexStr}$`).test(value.toLowerCase());
+}
+
+/**
+ * Returns true if any pattern in the list matches the value.
+ * @param {string[]} patterns
+ * @param {string}   value
+ * @returns {boolean}
+ */
+function matchesAny(patterns, value) {
+  if (!Array.isArray(patterns) || patterns.length === 0) return false;
+  return patterns.some(p => matchesGlob(p, value));
+}
+
+/**
  * Node types worth tracking in the diff.
  * DOCUMENT and CANVAS are structural wrappers — skip them.
  */
@@ -10,35 +40,81 @@ const TRACKED_TYPES = new Set([
   'VECTOR', 'BOOLEAN_OPERATION', 'SECTION'
 ]);
 
+/** Node fields the differ reads. `children` is handled separately by trimTree. */
+const TRIMMED_FIELDS = ['id', 'name', 'type', 'characters', 'fills', 'styles', 'visible'];
+
 /**
  * Recursively flattens a Figma document tree into a Map keyed by node id.
- * Each entry carries the node, its containing page name, and the nearest
- * FRAME or SECTION ancestor name (used as the "screen" label in output).
+ * Each entry carries the node, its containing page name, and the name and id
+ * of its top-level screen (the outermost FRAME/SECTION on the page; a FRAME
+ * directly inside a top-level SECTION is its own screen).
  *
- * @param {object} node        Current Figma node
- * @param {string} pageName    Name of the top-level CANVAS ancestor
- * @param {string} frameName   Name of the nearest FRAME/SECTION ancestor
- * @param {Map}    result      Accumulator map
- * @returns {Map<string, {node: object, pageName: string, frameName: string}>}
+ * @param {object}  node        Current Figma node
+ * @param {string}  pageName    Name of the top-level CANVAS ancestor
+ * @param {string}  frameName   Name of the screen the node sits in
+ * @param {string}  frameId     Id of the screen the node sits in
+ * @param {Map}     result      Accumulator map
+ * @param {boolean} parentIsScreenSection  True when the parent is a top-level SECTION
+ * @param {object}  [exclusions]  Optional { pages: string[], frames: string[] } from project config
+ * @returns {Map<string, {node: object, pageName: string, frameName: string, frameId: string}>}
  */
-function flattenTree(node, pageName = '', frameName = '', frameId = '', result = new Map()) {
-  const currentPage  = node.type === 'CANVAS' ? node.name : pageName;
-  // Treat top-level FRAMEs and SECTIONs directly under a page as the "screen"
-  const isTopFrame = (node.type === 'FRAME' || node.type === 'SECTION') && pageName !== '';
-  const currentFrame = isTopFrame ? node.name : frameName;
-  const currentFrameId = isTopFrame ? node.id : frameId;
+function flattenTree(node, pageName = '', frameName = '', frameId = '', result = new Map(), parentIsScreenSection = false, exclusions = null) {
+  const currentPage = node.type === 'CANVAS' ? node.name : pageName;
+
+  // Exclusion: skip entire pages matching a pattern
+  if (node.type === 'CANVAS' && exclusions && matchesAny(exclusions.pages, node.name)) {
+    return result;
+  }
+
+  // Screen rule (G6 / Item 15): the screen is the outermost FRAME/SECTION on a page.
+  // All descendants inherit it; inner FRAMEs/SECTIONs do NOT reset it.
+  // Exception: a FRAME that is a direct child of a top-level SECTION is its own
+  // screen (a section is a container of screens).
+  const isTopLevelScreen =
+    (node.type === 'FRAME' || node.type === 'SECTION') &&
+    pageName !== '' &&
+    frameName === '';
+  const isFrameInSection = node.type === 'FRAME' && parentIsScreenSection;
+  const becomesScreen = isTopLevelScreen || isFrameInSection;
+  const currentFrame = becomesScreen ? node.name : frameName;
+  const currentFrameId = becomesScreen ? node.id : frameId;
+
+  // Exclusion: skip top-level frames matching a pattern
+  if (becomesScreen && exclusions && matchesAny(exclusions.frames, node.name)) {
+    return result;
+  }
 
   if (TRACKED_TYPES.has(node.type)) {
     result.set(node.id, { node, pageName: currentPage, frameName: currentFrame, frameId: currentFrameId });
   }
 
   if (Array.isArray(node.children)) {
+    const childrenOfScreenSection = isTopLevelScreen && node.type === 'SECTION';
     for (const child of node.children) {
-      flattenTree(child, currentPage, currentFrame, currentFrameId, result);
+      flattenTree(child, currentPage, currentFrame, currentFrameId, result, childrenOfScreenSection, exclusions);
     }
   }
 
   return result;
+}
+
+/**
+ * Reduces a Figma document tree to the fields the differ reads, so stored
+ * snapshots stay small. Applies recursively; fields that are absent on a
+ * node are omitted (not set to undefined).
+ *
+ * @param {object} node
+ * @returns {object}
+ */
+function trimTree(node) {
+  const trimmed = {};
+  for (const key of TRIMMED_FIELDS) {
+    if (node[key] !== undefined) trimmed[key] = node[key];
+  }
+  if (Array.isArray(node.children)) {
+    trimmed.children = node.children.map(trimTree);
+  }
+  return trimmed;
 }
 
 /**
@@ -62,30 +138,52 @@ function stylesChanged(a, b) {
 }
 
 /**
- * Produces a human-readable array of change descriptions for a node
- * that exists in both old and new trees.
+ * Produces a structured array of change descriptions for a node that exists
+ * in both old and new trees.
+ *
+ * Each entry: { type: string, label: string, emoji: string, oldValue?, newValue? }
+ *
+ * type values:
+ *   text_change | rename | visibility | fill_colour | fill_token_removed |
+ *   token_added | token_removed | token_changed
  *
  * @param {object} oldNode
  * @param {object} newNode
- * @returns {string[]}  Empty array means no meaningful change detected.
+ * @returns {Array<{type: string, label: string, emoji: string, oldValue?: string, newValue?: string}>}
  */
 function describeChanges(oldNode, newNode) {
   const changes = [];
 
   // Text content
   if (oldNode.characters !== newNode.characters) {
-    changes.push(`text updated: ${oldNode.characters || '(empty)'} → ${newNode.characters || '(empty)'}`);
+    changes.push({
+      type: 'text_change',
+      emoji: '✏️',
+      label: `Copy changed from "${oldNode.characters || '(empty)'}" to "${newNode.characters || '(empty)'}"`,
+      oldValue: oldNode.characters || '(empty)',
+      newValue: newNode.characters || '(empty)'
+    });
   }
 
   // Name
   if (oldNode.name !== newNode.name) {
-    changes.push(`renamed: "${oldNode.name}" → "${newNode.name}"`);
+    changes.push({
+      type: 'rename',
+      emoji: '🔄',
+      label: `Renamed from "${oldNode.name}" to "${newNode.name}"`,
+      oldValue: oldNode.name,
+      newValue: newNode.name
+    });
   }
 
   // Visibility
   if (oldNode.visible !== newNode.visible) {
-    const state = newNode.visible === false ? 'hidden' : 'made visible';
-    changes.push(`layer ${state}`);
+    const hidden = newNode.visible === false;
+    changes.push({
+      type: 'visibility',
+      emoji: '👁️',
+      label: hidden ? 'Hidden' : 'Made visible'
+    });
   }
 
   // Fill colour
@@ -93,9 +191,17 @@ function describeChanges(oldNode, newNode) {
     const hadStyle = oldNode.styles && oldNode.styles.fill;
     const hasStyle = newNode.styles && newNode.styles.fill;
     if (hadStyle && !hasStyle) {
-      changes.push('fill colour changed; style reference removed');
+      changes.push({
+        type: 'fill_token_removed',
+        emoji: '🎨',
+        label: 'Colour updated and design token link removed (colour is now hardcoded)'
+      });
     } else {
-      changes.push('fill colour changed');
+      changes.push({
+        type: 'fill_colour',
+        emoji: '🎨',
+        label: 'Background / fill colour updated'
+      });
     }
   }
 
@@ -106,11 +212,11 @@ function describeChanges(oldNode, newNode) {
     // Only report if this is about non-fill styles, or fill style changed independently
     if (!fillsChanged(oldNode.fills, newNode.fills)) {
       if (hadFillStyle && !hasFillStyle) {
-        changes.push('style reference removed');
+        changes.push({ type: 'token_removed', emoji: '🎨', label: 'Design token link removed' });
       } else if (!hadFillStyle && hasFillStyle) {
-        changes.push('style reference added');
+        changes.push({ type: 'token_added', emoji: '🎨', label: 'Design token applied' });
       } else if (JSON.stringify(oldNode.styles) !== JSON.stringify(newNode.styles)) {
-        changes.push('style reference changed');
+        changes.push({ type: 'token_changed', emoji: '🎨', label: 'Design token changed' });
       }
     }
   }
@@ -134,9 +240,16 @@ function describeChanges(oldNode, newNode) {
  *   pages: string[]
  * }}
  */
-function diffTrees(oldTree, newTree, commentsDiff = {}) {
-  const newMap = flattenTree(newTree);
-  const oldMap = oldTree ? flattenTree(oldTree) : new Map();
+/**
+ * @param {object|null} oldTree
+ * @param {object}      newTree
+ * @param {object|Array} [commentsDiff={}]
+ * @param {object}       [options={}]  Optional { exclusions: { pages, frames } }
+ */
+function diffTrees(oldTree, newTree, commentsDiff = {}, options = {}) {
+  const exclusions = options.exclusions || null;
+  const newMap = flattenTree(newTree, '', '', '', new Map(), false, exclusions);
+  const oldMap = oldTree ? flattenTree(oldTree, '', '', '', new Map(), false, exclusions) : new Map();
 
   const added = [];
   const removed = [];
@@ -194,4 +307,4 @@ function diffTrees(oldTree, newTree, commentsDiff = {}) {
   };
 }
 
-module.exports = { diffTrees, flattenTree };
+module.exports = { diffTrees, flattenTree, trimTree, matchesGlob };

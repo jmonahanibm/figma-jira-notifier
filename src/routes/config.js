@@ -1,6 +1,12 @@
 'use strict';
 
-const { getConfig, saveConfig } = require('../configStore');
+const {
+  getConfig,
+  saveConfig,
+  getLocalSettings,
+  saveLocalSettings,
+  testDataDir
+} = require('../configStore');
 const { reschedule } = require('../scheduler');
 
 /**
@@ -39,16 +45,55 @@ function saveConfigRoute(req, res) {
 
   saveConfig(merged);
 
-  // If the schedule changed, update the cron task
-  if (incoming.schedule && incoming.schedule !== current.schedule) {
-    try {
-      reschedule(merged.schedule);
-    } catch (err) {
-      return res.status(400).json({ error: err.message });
-    }
+  // Re-synchronise scheduler tasks with any updated global/project schedules
+  try {
+    reschedule(merged.schedule);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
   }
 
   res.json({ ok: true });
 }
 
-module.exports = { getConfigRoute, saveConfigRoute };
+/**
+ * GET /api/local-settings
+ * Returns local machine settings (~/.figma-jira-notifier/localSettings.json).
+ */
+function getLocalSettingsRoute(req, res) {
+  res.json({ settings: getLocalSettings() });
+}
+
+/**
+ * POST /api/local-settings
+ * Updates local machine settings.
+ */
+function saveLocalSettingsRoute(req, res) {
+  const incoming = req.body;
+  if (!incoming || typeof incoming !== 'object') {
+    return res.status(400).json({ error: 'Invalid settings payload' });
+  }
+  saveLocalSettings(incoming);
+  reschedule();
+  res.json({ ok: true, settings: getLocalSettings() });
+}
+
+/**
+ * POST /api/test-data-dir
+ * Tests read/write permissions for a given workspace folder path.
+ */
+function testDataDirRoute(req, res) {
+  const { path: dirPath } = req.body || {};
+  const result = testDataDir(dirPath);
+  if (!result.ok) {
+    return res.status(400).json(result);
+  }
+  res.json(result);
+}
+
+module.exports = {
+  getConfigRoute,
+  saveConfigRoute,
+  getLocalSettingsRoute,
+  saveLocalSettingsRoute,
+  testDataDirRoute
+};

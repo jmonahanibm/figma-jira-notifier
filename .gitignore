@@ -2,3 +2,6 @@ node_modules/
 config.json
 snapshots/
 server-test.log
+gui/dist/
+exports/
+runs.json

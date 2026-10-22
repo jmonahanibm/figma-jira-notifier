@@ -14,7 +14,7 @@ async function fetchFileTree(fileKey, token) {
   try {
     const response = await axios.get(`${BASE_URL}/v1/files/${fileKey}`, {
       headers: { 'X-Figma-Token': token },
-      params: { geometry: 'omit', depth: 3 }
+      params: { geometry: 'omit' }
     });
     return response.data.document;
   } catch (err) {

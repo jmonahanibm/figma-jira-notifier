@@ -1,9 +1,17 @@
 {
   "schedule": "0 8 * * *",
+  "maxNodesInNotification": 50,
+  "deepLinkTarget": "both",
+  "snapshotRetention": 7,
   "figmaToken": "figd_YOUR_FIGMA_TOKEN",
   "jiraBaseUrl": "https://your-org.atlassian.net",
   "jiraEmail": "you@example.com",
   "jiraApiToken": "YOUR_JIRA_API_TOKEN",
+  "channels": {
+    "jira": true,
+    "slackWebhookUrl": "https://hooks.slack.com/services/...",
+    "teamsWebhookUrl": ""
+  },
   "projects": [
     {
       "id": "replace-with-a-uuid",
@@ -11,10 +19,24 @@
       "figmaUrl": "https://www.figma.com/design/YourFigmaFileKey/Your-File-Name",
       "figmaFileName": "Your File Name",
       "jiraIssueKey": "PROJ-123",
+      "schedule": "0 9 * * 1",
+      "syncComments": true,
+      "postFigmaComment": true,
+      "exportFormat": "both",
+      "exclusions": {
+        "pages": ["Archive", "WIP*"],
+        "frames": ["_annotations", "DO NOT SHIP*"]
+      },
+      "channelOverride": {
+        "jira": true,
+        "slackWebhookUrl": "",
+        "teamsWebhookUrl": ""
+      },
       "mentionedUsers": [
         {
           "displayName": "Jane Dev",
-          "jiraAccountId": "accountid:xxxxxxxxxxxxxxxxxxxxxxxx"
+          "jiraAccountId": "5b10ac8d82e05b22cc7d4ef5",
+          "email": "jane.dev@example.com"
         }
       ]
     }
