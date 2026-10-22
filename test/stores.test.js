@@ -164,3 +164,103 @@ describe('snapshotStore.saveSnapshot', () => {
     expect(fs.existsSync(expectedPath)).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// snapshotStore.archiveSnapshot / listSnapshots / restoreSnapshot (Item 3)
+// ---------------------------------------------------------------------------
+
+describe('snapshotStore.archiveSnapshot', () => {
+  let ctx;
+  beforeEach(() => { ctx = setupTestDir(); });
+  afterEach(() => ctx.teardown());
+
+  test('creates an archive directory for the file key', () => {
+    const snap = { _snapshotVersion: 2, document: { id: '0:0' }, knownCommentIds: [], knownResolvedCommentIds: [], _savedAt: '2025-01-01T08:00:00.000Z' };
+    ctx.snapshotStore.archiveSnapshot('fileA', snap);
+    expect(fs.existsSync(path.join(ctx.tmpDir, 'snapshots', 'fileA'))).toBe(true);
+  });
+
+  test('writes a .json file named after the snapshot _savedAt', () => {
+    const snap = { _snapshotVersion: 2, document: {}, knownCommentIds: [], knownResolvedCommentIds: [], _savedAt: '2025-06-01T09:00:00.000Z' };
+    ctx.snapshotStore.archiveSnapshot('fileB', snap);
+    const dir = path.join(ctx.tmpDir, 'snapshots', 'fileB');
+    const files = fs.readdirSync(dir);
+    expect(files.length).toBe(1);
+    expect(files[0]).toContain('2025-06-01T09');
+  });
+
+  test('prunes oldest archives when retention limit is exceeded', () => {
+    for (let i = 1; i <= 5; i++) {
+      const savedAt = `2025-01-0${i}T00:00:00.000Z`;
+      ctx.snapshotStore.archiveSnapshot('fileC', { _savedAt: savedAt }, 3);
+    }
+    const dir = path.join(ctx.tmpDir, 'snapshots', 'fileC');
+    const files = fs.readdirSync(dir);
+    expect(files.length).toBe(3);
+    // Oldest (Jan 01, Jan 02) should be gone; Jan 03-05 remain
+    expect(files.some(f => f.includes('2025-01-01'))).toBe(false);
+    expect(files.some(f => f.includes('2025-01-02'))).toBe(false);
+    expect(files.some(f => f.includes('2025-01-05'))).toBe(true);
+  });
+
+  test('uses current timestamp as filename when snapshot has no _savedAt', () => {
+    ctx.snapshotStore.archiveSnapshot('fileD', { document: {} }); // no _savedAt
+    const dir = path.join(ctx.tmpDir, 'snapshots', 'fileD');
+    expect(fs.readdirSync(dir).length).toBe(1);
+  });
+});
+
+describe('snapshotStore.listSnapshots', () => {
+  let ctx;
+  beforeEach(() => { ctx = setupTestDir(); });
+  afterEach(() => ctx.teardown());
+
+  test('returns empty array when no archives exist', () => {
+    expect(ctx.snapshotStore.listSnapshots('noSuchKey')).toEqual([]);
+  });
+
+  test('returns entries newest first', () => {
+    ctx.snapshotStore.archiveSnapshot('fileE', { _savedAt: '2025-01-01T00:00:00.000Z' });
+    ctx.snapshotStore.archiveSnapshot('fileE', { _savedAt: '2025-01-03T00:00:00.000Z' });
+    ctx.snapshotStore.archiveSnapshot('fileE', { _savedAt: '2025-01-02T00:00:00.000Z' });
+    const list = ctx.snapshotStore.listSnapshots('fileE');
+    expect(list.length).toBe(3);
+    // All have savedAt strings; order is newest first
+    const dates = list.map(e => new Date(e.savedAt).getTime());
+    expect(dates[0]).toBeGreaterThan(dates[1]);
+    expect(dates[1]).toBeGreaterThan(dates[2]);
+  });
+
+  test('each entry has timestamp and savedAt fields', () => {
+    ctx.snapshotStore.archiveSnapshot('fileF', { _savedAt: '2025-06-15T12:00:00.000Z' });
+    const list = ctx.snapshotStore.listSnapshots('fileF');
+    expect(list[0]).toHaveProperty('timestamp');
+    expect(list[0]).toHaveProperty('savedAt');
+    expect(list[0].savedAt).toBe('2025-06-15T12:00:00.000Z');
+  });
+});
+
+describe('snapshotStore.restoreSnapshot', () => {
+  let ctx;
+  beforeEach(() => { ctx = setupTestDir(); });
+  afterEach(() => ctx.teardown());
+
+  test('promotes an archived snapshot to the current baseline', () => {
+    const original = { _snapshotVersion: 2, document: { id: 'old' }, knownCommentIds: [], knownResolvedCommentIds: [], _savedAt: '2025-01-01T00:00:00.000Z' };
+    ctx.snapshotStore.archiveSnapshot('fileG', original);
+    // Save a different current baseline
+    ctx.snapshotStore.saveSnapshot('fileG', { _snapshotVersion: 2, document: { id: 'new' }, knownCommentIds: [], knownResolvedCommentIds: [], _savedAt: '2025-01-02T00:00:00.000Z' });
+
+    const list = ctx.snapshotStore.listSnapshots('fileG');
+    expect(list.length).toBe(1);
+    ctx.snapshotStore.restoreSnapshot('fileG', list[0].timestamp);
+
+    const restored = ctx.snapshotStore.getSnapshot('fileG');
+    expect(restored.document.id).toBe('old');
+  });
+
+  test('throws when the archive file does not exist', () => {
+    expect(() => ctx.snapshotStore.restoreSnapshot('fileH', 'no-such-timestamp'))
+      .toThrow('Archived snapshot not found');
+  });
+});

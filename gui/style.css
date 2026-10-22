@@ -373,8 +373,67 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   align-items: center;
   margin-bottom: 8px;
 }
-.mention-row input { flex: 1; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 13px; font-family: var(--font); }
 .mention-row button { padding: 7px 10px; flex-shrink: 0; }
+
+/* Typeahead wrapper */
+.mention-search-wrap {
+  position: relative;
+  flex: 1;
+}
+.mention-search {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-family: var(--font);
+}
+.mention-search:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+/* Dropdown */
+.mention-dropdown {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 12px rgba(0,0,0,.12);
+  list-style: none;
+  padding: 4px 0;
+  margin: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  z-index: 100;
+}
+.mention-dropdown-item {
+  padding: 7px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mention-dropdown-item:hover { background: var(--surface); }
+.mention-dropdown-email {
+  color: var(--muted);
+  font-size: 12px;
+  margin-left: 6px;
+}
+.mention-dropdown-empty {
+  padding: 7px 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Unresolved indicator */
+.mention-unresolved {
+  color: var(--warning);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: default;
+}
 
 /* ---- Modal ---- */
 .modal-backdrop {
@@ -434,6 +493,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .result-row.posted { border-color: #a6f4bc; background: #f0fff4; }
 .result-row.no_changes { border-color: var(--border); background: var(--surface); }
 .result-row.first_run { border-color: #b8daff; background: #f0f6ff; }
+.result-row.rebaselined { border-color: #b8daff; background: #f0f6ff; }
+
 .result-row.error { border-color: #ffb3ba; background: #fff5f5; }
 .result-icon { font-size: 16px; }
 .result-detail { color: var(--muted); font-size: 12px; }
@@ -446,11 +507,245 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   margin-bottom: 14px;
   display: none;
 }
-.alert.show { display: block; }
+.alert.show { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.alert-dismiss { background: none; border: none; cursor: pointer; font-size: 15px; padding: 0 2px; color: inherit; line-height: 1; }
 .alert-success { background: #f0fff4; border: 1px solid #a6f4bc; color: var(--success); }
 .alert-error { background: #fff5f5; border: 1px solid #ffb3ba; color: var(--danger); }
+
+/* ---- Hosted-mode notice ---- */
+.info-banner {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  font-size: 13px;
+  line-height: 1.6;
+  margin-bottom: 24px;
+}
+
+/* ---- Project name link ---- */
+.project-card-info .name .name-link { color: inherit; }
 
 /* ---- Misc ---- */
 .divider { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 .label-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .label-row span { font-size: 12px; font-weight: 500; color: var(--muted); }
+
+/* ============================================================
+   Timberwolves dark theme — unlocked by 10x W key press
+   ============================================================ */
+
+/* Toggle button — hidden until unlocked */
+.btn-wolves {
+  background: transparent;
+  border: 1px solid transparent;
+  font-size: 18px;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: var(--radius);
+  line-height: 1;
+  transition: background 0.15s;
+}
+.btn-wolves:hover { background: rgba(255,255,255,0.08); }
+.btn-wolves.active { background: rgba(120,190,32,0.18); }
+
+/* Theme variables */
+[data-theme="wolves"] {
+  --bg:      #0C2340;
+  --surface: #0e2a4d;
+  --border:  #1a3a60;
+  --text:    #e8f1fb;
+  --muted:   #7aabcf;
+  --accent:  #78BE20;
+  --danger:  #ff6b6b;
+  --success: #78BE20;
+  --warning: #f5c518;
+}
+
+[data-theme="wolves"] body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+[data-theme="wolves"] .app-header {
+  background: #061829;
+  border-bottom-color: #236192;
+}
+
+[data-theme="wolves"] .app-header h1 { color: #78BE20; }
+[data-theme="wolves"] .app-header .subtitle { color: #7aabcf; }
+[data-theme="wolves"] .app-header-center a { color: var(--text); }
+[data-theme="wolves"] .app-header-center a:hover { color: #78BE20; }
+[data-theme="wolves"] .gh-link { color: #78BE20; }
+
+[data-theme="wolves"] .tab-btn { color: var(--muted); }
+[data-theme="wolves"] .tab-btn:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+[data-theme="wolves"] .tab-btn.active { color: #78BE20; border-bottom-color: #78BE20; }
+[data-theme="wolves"] .tab-btn.active .badge { background: rgba(120,190,32,0.15); color: #78BE20; }
+
+[data-theme="wolves"] .section { background: var(--surface); border-color: var(--border); }
+[data-theme="wolves"] .section-header { background: #0a1f38; border-bottom-color: var(--border); }
+
+[data-theme="wolves"] .status-bar { background: #0a1f38; border-color: #236192; }
+
+[data-theme="wolves"] .field input,
+[data-theme="wolves"] .field select {
+  background: #0a1f38;
+  border-color: var(--border);
+  color: var(--text);
+}
+[data-theme="wolves"] .field input:focus,
+[data-theme="wolves"] .field select:focus { border-color: #78BE20; }
+
+[data-theme="wolves"] .btn-primary { background: #236192; border-color: #236192; color: #fff; }
+[data-theme="wolves"] .btn-primary:hover:not(:disabled) { background: #2a73ad; border-color: #2a73ad; }
+
+[data-theme="wolves"] .btn-secondary { background: #0a1f38; border-color: var(--border); color: var(--text); }
+[data-theme="wolves"] .btn-secondary:hover:not(:disabled) { background: #112840; }
+
+[data-theme="wolves"] .btn-run { background: #78BE20; border-color: #78BE20; color: #0C2340; font-weight: 700; }
+[data-theme="wolves"] .btn-run:hover:not(:disabled) { opacity: 0.88; }
+[data-theme="wolves"] .btn-run-single { background: #78BE20; border-color: #78BE20; color: #0C2340; font-weight: 700; }
+
+[data-theme="wolves"] .project-card { background: var(--surface); border-color: var(--border); }
+[data-theme="wolves"] .project-card:hover { border-color: #236192; }
+
+[data-theme="wolves"] .modal { background: #0e2a4d; border-color: #236192; }
+[data-theme="wolves"] .modal-header { border-bottom-color: #236192; }
+[data-theme="wolves"] .modal-footer { border-top-color: #236192; }
+
+[data-theme="wolves"] .result-row { background: #0a1f38; border-color: var(--border); }
+[data-theme="wolves"] .result-row.posted { background: rgba(120,190,32,0.1); border-color: #78BE20; }
+[data-theme="wolves"] .result-row.first_run,
+[data-theme="wolves"] .result-row.rebaselined { background: rgba(35,97,146,0.2); border-color: #236192; }
+[data-theme="wolves"] .result-row.error { background: rgba(255,107,107,0.1); border-color: #ff6b6b; }
+
+[data-theme="wolves"] .alert-success { background: rgba(120,190,32,0.1); border-color: #78BE20; color: #78BE20; }
+[data-theme="wolves"] .alert-error { background: rgba(255,107,107,0.1); border-color: #ff6b6b; color: #ff6b6b; }
+
+[data-theme="wolves"] .mention-dropdown {
+  background: #0a1f38;
+  border-color: #236192;
+}
+[data-theme="wolves"] .mention-dropdown-item:hover { background: #112840; }
+
+[data-theme="wolves"] .info-banner { background: #0a1f38; border-color: #236192; }
+
+[data-theme="wolves"] a { color: #78BE20; }
+
+/* ============================================================
+   Wolf tooth motif
+   The tooth is a repeating zigzag of sharp downward triangles:
+   alternating green (#78BE20) and navy (#0C2340) points.
+   Rendered as an inline SVG data URI background — no external
+   assets, works in the binary and on GitHub Pages.
+   ============================================================ */
+
+/*
+  SVG pattern breakdown — 40×14px tile, two teeth per tile:
+    Green tooth:  triangle pointing down at x=0–20
+    Navy tooth:   triangle pointing down at x=20–40
+  The full strip tiles horizontally across 100% width.
+*/
+
+/* Band below the header — hidden by default, shown in wolves theme */
+.wolves-tooth-band {
+  display: none;
+  height: 14px;
+  width: 100%;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='14'%3E%3Cpolygon points='0,0 20,0 10,14' fill='%2378BE20'/%3E%3Cpolygon points='20,0 40,0 30,14' fill='%230C2340'/%3E%3C/svg%3E");
+  background-repeat: repeat-x;
+  background-size: 40px 14px;
+  background-color: #061829;
+  flex-shrink: 0;
+}
+
+[data-theme="wolves"] .wolves-tooth-band {
+  display: block;
+}
+
+/* Tooth accent on section-header tops — a slim 7px strip */
+[data-theme="wolves"] .section-header {
+  position: relative;
+  overflow: hidden;
+}
+[data-theme="wolves"] .section-header::before {
+  content: '';
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 7px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='7'%3E%3Cpolygon points='0,0 10,0 5,7' fill='%2378BE20'/%3E%3Cpolygon points='10,0 20,0 15,7' fill='%230C2340'/%3E%3C/svg%3E");
+  background-repeat: repeat-x;
+  background-size: 20px 7px;
+  background-color: #236192;
+}
+[data-theme="wolves"] .section-header {
+  padding-top: 19px; /* 12px original + 7px tooth */
+}
+
+/* Tooth divider inside modal header */
+[data-theme="wolves"] .modal-header {
+  position: relative;
+  overflow: hidden;
+}
+[data-theme="wolves"] .modal-header::after {
+  content: '';
+  display: block;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 5px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='5'%3E%3Cpolygon points='0,0 10,0 5,5' fill='%2378BE20'/%3E%3Cpolygon points='10,0 20,0 15,5' fill='%230C2340'/%3E%3C/svg%3E");
+  background-repeat: repeat-x;
+  background-size: 20px 5px;
+  background-color: #236192;
+}
+[data-theme="wolves"] .modal-header {
+  border-bottom: none;
+  padding-bottom: 21px; /* 16px original + 5px tooth */
+}
+
+/* Tooth left-edge accent on hovered project cards */
+[data-theme="wolves"] .project-card {
+  border-left: none;
+  position: relative;
+}
+[data-theme="wolves"] .project-card::before {
+  content: '';
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 6px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='16'%3E%3Cpolygon points='0,0 6,0 6,8 0,8' fill='%231a3a60'/%3E%3Cpolygon points='0,8 6,8 6,16 0,16' fill='%231a3a60'/%3E%3C/svg%3E");
+  background-repeat: repeat-y;
+  background-size: 6px 16px;
+  border-radius: var(--radius) 0 0 var(--radius);
+  transition: background-image 0.15s;
+}
+[data-theme="wolves"] .project-card:hover::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='16'%3E%3Cpolygon points='0,0 6,4 0,8' fill='%2378BE20'/%3E%3Cpolygon points='0,8 6,12 0,16' fill='%23236192'/%3E%3C/svg%3E");
+}
+
+/* Status bar — tooth top edge */
+[data-theme="wolves"] .status-bar {
+  position: relative;
+  border-top: none;
+  margin-top: 22px;
+}
+[data-theme="wolves"] .status-bar::before {
+  content: '';
+  position: absolute;
+  top: -7px;
+  left: 0;
+  right: 0;
+  height: 7px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='7'%3E%3Cpolygon points='0,7 10,7 5,0' fill='%231a3a60'/%3E%3Cpolygon points='10,7 20,7 15,0' fill='%230a1f38'/%3E%3C/svg%3E");
+  background-repeat: repeat-x;
+  background-size: 20px 7px;
+}

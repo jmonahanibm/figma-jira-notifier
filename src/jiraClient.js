@@ -1,463 +1,14 @@
 'use strict';
 
+/**
+ * Jira REST calls (Node only — uses axios).
+ *
+ * The pure ADF builders live in ./adf so they can also be bundled for the
+ * browser. They are re-exported here so existing imports keep working.
+ */
+
 const axios = require('axios');
-
-// ---------------------------------------------------------------------------
-// ADF helpers
-// ---------------------------------------------------------------------------
-
-function adfText(text, bold = false) {
-  const node = { type: 'text', text };
-  if (bold) node.marks = [{ type: 'strong' }];
-  return node;
-}
-
-function adfLink(text, href) {
-  return {
-    type: 'text',
-    text,
-    marks: [{ type: 'link', attrs: { href } }]
-  };
-}
-
-function adfParagraph(...inlineNodes) {
-  return { type: 'paragraph', content: inlineNodes };
-}
-
-function adfBulletList(items) {
-  return {
-    type: 'bulletList',
-    content: items.map(item => ({
-      type: 'listItem',
-      content: [adfParagraph(...(Array.isArray(item) ? item : [adfText(item)]))]
-    }))
-  };
-}
-
-function adfHeading(level, text) {
-  return { type: 'heading', attrs: { level }, content: [adfText(text)] };
-}
-
-function adfMention(user) {
-  if (typeof user === 'string') {
-    return {
-      type: 'mention',
-      attrs: { id: user, text: `@${user.split('@')[0]}` }
-    };
-  }
-  const id = user.jiraAccountId || user.email || user.displayName || '';
-  const text = user.displayName ? `@${user.displayName}` : (user.email ? `@${user.email.split('@')[0]}` : `@${id}`);
-  return {
-    type: 'mention',
-    attrs: { id, text }
-  };
-}
-
-function adfRule() {
-  return { type: 'rule' };
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Human-readable label for a Figma node type. */
-function typeLabel(type) {
-  const map = {
-    FRAME: 'Frame', GROUP: 'Group', COMPONENT: 'Component',
-    COMPONENT_SET: 'Component Set', INSTANCE: 'Instance',
-    TEXT: 'Text', RECTANGLE: 'Rectangle', ELLIPSE: 'Ellipse',
-    VECTOR: 'Vector', BOOLEAN_OPERATION: 'Boolean Op', SECTION: 'Section'
-  };
-  return map[type] || type;
-}
-
-/**
- * Builds desktop figma:// and browser web URLs for a given node.
- * @param {string} figmaFileKey
- * @param {string} nodeId
- * @param {string} [figmaUrl='']
- * @returns {{ appUrl: string, browserUrl: string }}
- */
-function buildNodeLinks(figmaFileKey, nodeId, figmaUrl = '') {
-  if (!figmaFileKey) return { appUrl: '', browserUrl: '' };
-  const encodedNodeId = nodeId ? encodeURIComponent(nodeId.replace(/:/g, '-')) : '';
-  const nodeQuery = encodedNodeId ? `?node-id=${encodedNodeId}` : '';
-
-  const appUrl = `figma://file/${figmaFileKey}${nodeQuery}`;
-  let browserUrl = `https://www.figma.com/design/${figmaFileKey}${nodeQuery}`;
-  if (figmaUrl && figmaUrl.startsWith('http')) {
-    const base = figmaUrl.split('?')[0];
-    browserUrl = `${base}${nodeQuery}`;
-  }
-
-  return { appUrl, browserUrl };
-}
-
-/**
- * Detects "sweeping" changes — change descriptions shared by >= threshold nodes
- * across the whole page. Returns { sweepingDescs, restEntries }.
- */
-function partitionSweeping(entries, threshold = 3) {
-  const changeCount = new Map();
-  for (const entry of entries) {
-    for (const c of (entry.changes || [])) {
-      changeCount.set(c, (changeCount.get(c) || 0) + 1);
-    }
-  }
-  const sweepingDescs = new Set(
-    [...changeCount.entries()].filter(([, n]) => n >= threshold).map(([d]) => d)
-  );
-
-  const restEntries = entries.map(entry => ({
-    ...entry,
-    changes: (entry.changes || []).filter(c => !sweepingDescs.has(c))
-  })).filter(e => e.changes.length > 0);
-
-  return { sweepingDescs, restEntries };
-}
-
-// ---------------------------------------------------------------------------
-// Section builders
-// ---------------------------------------------------------------------------
-
-/**
- * Formats a node header row with deep links and metadata tags:
- * e.g. "Screen / Button (Browser) (Updated, Text, Page)"
- *
- * @param {object} node
- * @param {string} action 'Added' | 'Removed' | 'Updated'
- * @param {string} figmaFileKey
- * @param {string} figmaUrl
- * @returns {Array} ADF inline node list
- */
-function formatNodeHeader(node, action, figmaFileKey, figmaUrl) {
-  const { appUrl, browserUrl } = buildNodeLinks(figmaFileKey, node.id, figmaUrl);
-  const displayName = node.frameName ? `${node.frameName} / ${node.name}` : node.name;
-  const pageLabel = node.pageName || 'Page';
-  const metaBadge = `(${action}, ${typeLabel(node.type)}, ${pageLabel})`;
-
-  const inlines = [];
-
-  // 1. App deep link
-  if (appUrl) {
-    inlines.push(adfLink(displayName, appUrl));
-  } else {
-    inlines.push(adfText(displayName, true));
-  }
-
-  // 2. Browser link
-  if (browserUrl) {
-    inlines.push(adfText(' ('));
-    inlines.push(adfLink('Browser', browserUrl));
-    inlines.push(adfText(') '));
-  } else {
-    inlines.push(adfText(' '));
-  }
-
-  // 3. Metadata badge
-  inlines.push(adfText(metaBadge));
-
-  return inlines;
-}
-
-/**
- * Formats clean, readable change descriptions:
- * e.g. "text updated: Sign in → Log in" becomes 'Copy changed from "Sign in" to "Log in"'
- */
-function formatChangeDescription(desc) {
-  if (desc.startsWith('text updated: ')) {
-    const parts = desc.replace('text updated: ', '').split(' → ');
-    if (parts.length === 2) {
-      return `Copy changed from "${parts[0]}" to "${parts[1]}"`;
-    }
-  }
-  if (desc.startsWith('renamed: ')) {
-    return desc.charAt(0).toUpperCase() + desc.slice(1);
-  }
-  return desc.charAt(0).toUpperCase() + desc.slice(1);
-}
-
-/**
- * Builds readable changelog entries for a node:
- *   [Screen / Node Link (Browser) (Action, Type, Page)]
- *   Change description line
- */
-function buildNodeEntryBlocks(node, action, figmaFileKey, figmaUrl) {
-  const blocks = [];
-  const headerInlines = formatNodeHeader(node, action, figmaFileKey, figmaUrl);
-  blocks.push(adfParagraph(...headerInlines));
-
-  if (action === 'Updated' && node.changes && node.changes.length > 0) {
-    const changeLines = node.changes.map(c => [adfText(formatChangeDescription(c))]);
-    blocks.push(adfBulletList(changeLines));
-  } else if (action === 'Added') {
-    blocks.push(adfBulletList([[adfText(`Layer added to ${node.frameName || node.pageName || 'canvas'}`)]]));
-  } else if (action === 'Removed') {
-    blocks.push(adfBulletList([[adfText(`Layer removed from ${node.frameName || node.pageName || 'canvas'}`)]]));
-  }
-
-  return blocks;
-}
-
-function formatCommentBullet(comment) {
-  const author = (comment.user && (comment.user.handle || comment.user.name)) || 'Unknown user';
-  const message = comment.message || '(no message)';
-  return [
-    adfText(`${author}: `, true),
-    adfText(message)
-  ];
-}
-
-/**
- * Builds the Comments section (New, Completed/Resolved, and Currently Open comments).
- *
- * @param {object|Array} commentsDiff  { newComments, resolvedComments, openComments } or array
- * @returns {Array} ADF node array
- */
-function buildCommentsSection(commentsDiff) {
-  if (!commentsDiff) return [];
-
-  const newComments = Array.isArray(commentsDiff)
-    ? commentsDiff
-    : (commentsDiff.newComments || []);
-  const resolvedComments = Array.isArray(commentsDiff)
-    ? []
-    : (commentsDiff.resolvedComments || []);
-  const openComments = Array.isArray(commentsDiff)
-    ? []
-    : (commentsDiff.openComments || []);
-
-  if (newComments.length === 0 && resolvedComments.length === 0 && openComments.length === 0) {
-    return [];
-  }
-
-  const content = [adfHeading(3, 'Comments')];
-
-  if (newComments.length > 0) {
-    content.push(adfParagraph(adfText('New comments', true)));
-    content.push(adfBulletList(newComments.map(formatCommentBullet)));
-  }
-
-  if (resolvedComments.length > 0) {
-    content.push(adfParagraph(adfText('Completed comments', true)));
-    content.push(adfBulletList(resolvedComments.map(formatCommentBullet)));
-  }
-
-  if (openComments.length > 0) {
-    content.push(adfParagraph(adfText('Open comments', true)));
-    content.push(adfBulletList(openComments.map(formatCommentBullet)));
-  }
-
-  content.push(adfRule());
-  return content;
-}
-
-/**
- * Builds the full page → sweeping → screen-by-screen changelog section.
- */
-function buildPageSections(added, removed, updated, figmaFileKey = '', figmaUrl = '') {
-  const allPages = new Set([
-    ...added.map(n => n.pageName || 'Unknown page'),
-    ...removed.map(n => n.pageName || 'Unknown page'),
-    ...updated.map(n => n.pageName || 'Unknown page'),
-  ]);
-
-  const content = [];
-
-  for (const page of allPages) {
-    const pageAdded   = added.filter(n => (n.pageName || 'Unknown page') === page);
-    const pageRemoved = removed.filter(n => (n.pageName || 'Unknown page') === page);
-    const pageUpdated = updated.filter(n => (n.pageName || 'Unknown page') === page);
-
-    content.push(adfHeading(3, page));
-
-    // Combine all unique updated, added, and removed nodes under this page
-    for (const node of pageUpdated) {
-      content.push(...buildNodeEntryBlocks(node, 'Updated', figmaFileKey, figmaUrl));
-    }
-    for (const node of pageAdded) {
-      content.push(...buildNodeEntryBlocks(node, 'Added', figmaFileKey, figmaUrl));
-    }
-    for (const node of pageRemoved) {
-      content.push(...buildNodeEntryBlocks(node, 'Removed', figmaFileKey, figmaUrl));
-    }
-
-    content.push(adfRule());
-  }
-
-  return content;
-}
-
-// ---------------------------------------------------------------------------
-// Main ADF builder
-// ---------------------------------------------------------------------------
-
-/**
- * Builds the full ADF comment document for a diff result.
- *
- * @param {object}  diffResult        Output of differ.diffTrees()
- * @param {string}  figmaFileName
- * @param {string}  figmaUrl
- * @param {string}  runAt             ISO timestamp string
- * @param {Array}   mentionedUsers    Array of { displayName, jiraAccountId }
- * @param {string|null} snapshotDate  ISO timestamp of the baseline snapshot, or null
- * @returns {object} ADF document
- */
-/**
- * Splits an array of body content ADF nodes into chunks such that the serialized
- * JSON string of each document stays well under Jira's 32,768 character limit.
- *
- * @param {Array} headerNodes
- * @param {Array} bodyNodes
- * @param {Array} footerNodes
- * @param {number} [maxCharsPerDoc=24000]
- * @returns {Array<object>} Array of valid ADF documents
- */
-function chunkAdfDocument(headerNodes, bodyNodes, footerNodes, maxCharsPerDoc = 24000) {
-  if (bodyNodes.length === 0) {
-    return [{
-      version: 1,
-      type: 'doc',
-      content: [...headerNodes, ...footerNodes]
-    }];
-  }
-
-  const chunks = [];
-  let currentBody = [];
-
-  function calcDocSize(body) {
-    const doc = {
-      version: 1,
-      type: 'doc',
-      content: [...headerNodes, ...body, ...footerNodes]
-    };
-    return JSON.stringify(doc).length;
-  }
-
-  for (const node of bodyNodes) {
-    const testBody = [...currentBody, node];
-    if (currentBody.length > 0 && calcDocSize(testBody) > maxCharsPerDoc) {
-      chunks.push(currentBody);
-      currentBody = [node];
-    } else {
-      currentBody.push(node);
-    }
-  }
-
-  if (currentBody.length > 0) {
-    chunks.push(currentBody);
-  }
-
-  const totalParts = chunks.length;
-  if (totalParts <= 1) {
-    return [{
-      version: 1,
-      type: 'doc',
-      content: [...headerNodes, ...(chunks[0] || []), ...footerNodes]
-    }];
-  }
-
-  return chunks.map((chunkNodes, index) => {
-    const partNum = index + 1;
-    // Prefix header with Part indicator
-    const partHeaderNodes = headerNodes.map((hNode, hIdx) => {
-      if (hIdx === 0 && hNode.type === 'paragraph' && Array.isArray(hNode.content)) {
-        return {
-          ...hNode,
-          content: [
-            ...hNode.content,
-            adfText(` (Part ${partNum} of ${totalParts})`, true)
-          ]
-        };
-      }
-      return hNode;
-    });
-
-    return {
-      version: 1,
-      type: 'doc',
-      content: [
-        ...partHeaderNodes,
-        ...chunkNodes,
-        ...(partNum === totalParts ? footerNodes : [])
-      ]
-    };
-  });
-}
-
-/**
- * Builds ADF comment document(s) for a diff result, automatically chunking
- * into multiple documents if content exceeds Jira's size limit.
- *
- * @param {object}  diffResult        Output of differ.diffTrees()
- * @param {string}  figmaFileName
- * @param {string}  figmaUrl
- * @param {string}  runAt             ISO timestamp string
- * @param {Array}   mentionedUsers    Array of { displayName, jiraAccountId }
- * @param {string|null} snapshotDate  ISO timestamp of the baseline snapshot, or null
- * @returns {object} Single ADF document for backward compatibility
- */
-function buildCommentAdf(diffResult, figmaFileName, figmaUrl, runAt, mentionedUsers, snapshotDate) {
-  const docs = buildCommentAdfList(diffResult, figmaFileName, figmaUrl, runAt, mentionedUsers, snapshotDate);
-  return docs[0];
-}
-
-/**
- * Builds a list of ADF comment documents (1 or more if chunked).
- */
-function buildCommentAdfList(diffResult, figmaFileName, figmaUrl, runAt, mentionedUsers, snapshotDate) {
-  const { added, removed, updated, commentsDiff, comments = [], totalChanges, pages } = diffResult;
-  const pagesLabel = pages.length > 0 ? pages.join(', ') : 'Unknown';
-
-  const headerContent = [adfText('Design Changelog — ', false), adfText(`${totalChanges} Changes`, true)];
-
-  const mentionNodes = mentionedUsers.flatMap(u => [
-    adfMention(u),
-    adfText(' ')
-  ]);
-
-  // File row: filename as a clickable link when a URL is available
-  const fileNameNode = figmaUrl
-    ? { type: 'text', text: figmaFileName, marks: [{ type: 'link', attrs: { href: figmaUrl } }] }
-    : adfText(figmaFileName);
-  const fileRowNodes = [adfText('File: ', true), fileNameNode];
-
-  const headerNodes = [
-    adfParagraph(...headerContent),
-    adfParagraph(...fileRowNodes),
-    adfParagraph(adfText('Pages: ', true), adfText(pagesLabel)),
-  ];
-
-  if (!snapshotDate) {
-    headerNodes.push(adfParagraph(adfText('No previous snapshot found. This is the first run — baseline saved, no diff to report.')));
-  }
-
-  headerNodes.push(adfRule());
-
-  const bodyNodes = [];
-  const activeCommentsDiff = commentsDiff || (comments.length > 0 ? { newComments: comments } : null);
-  if (activeCommentsDiff) {
-    bodyNodes.push(...buildCommentsSection(activeCommentsDiff));
-  }
-
-  const fileKey = (figmaUrl ? (figmaUrl.match(/figma\.com\/(?:design|file)\/([A-Za-z0-9]+)/)?.[1] || '') : '') || figmaFileName;
-  if (added.length > 0 || removed.length > 0 || updated.length > 0) {
-    bodyNodes.push(...buildPageSections(added, removed, updated, fileKey, figmaUrl));
-  }
-
-  const footerNodes = [];
-  if (mentionNodes.length > 0) {
-    footerNodes.push(adfRule());
-    footerNodes.push(adfParagraph(adfText('Notifying: ', true), ...mentionNodes));
-  }
-
-  return chunkAdfDocument(headerNodes, bodyNodes, footerNodes);
-}
-
-// ---------------------------------------------------------------------------
-// Jira API call
-// ---------------------------------------------------------------------------
+const adf = require('./adf');
 
 /**
  * Posts an ADF comment to a Jira issue.
@@ -466,7 +17,7 @@ function buildCommentAdfList(diffResult, figmaFileName, figmaUrl, runAt, mention
  * @param {string} email        Jira account email
  * @param {string} apiToken     Jira API token
  * @param {string} issueKey     e.g. "PROJ-123"
- * @param {object} commentAdf   ADF document object
+ * @param {object} commentAdf   ADF document object (or array of them)
  * @returns {Promise<void>}
  */
 async function postComment(jiraBaseUrl, email, apiToken, issueKey, commentAdf) {
@@ -474,11 +25,11 @@ async function postComment(jiraBaseUrl, email, apiToken, issueKey, commentAdf) {
   const auth = Buffer.from(`${email}:${apiToken}`).toString('base64');
   const adfList = Array.isArray(commentAdf) ? commentAdf : [commentAdf];
 
-  for (const adf of adfList) {
+  for (const doc of adfList) {
     try {
       await axios.post(
         url,
-        { body: adf },
+        { body: doc },
         {
           headers: {
             'Authorization': `Basic ${auth}`,
@@ -519,7 +70,8 @@ async function fetchWatchers(jiraBaseUrl, email, apiToken, issueKey) {
     return watchers.map(w => ({
       accountId: w.accountId,
       displayName: w.displayName,
-      email: w.emailAddress || (w.displayName ? `${w.displayName.toLowerCase().replace(/\s+/g, '.')}@example.com` : w.accountId)
+      // Return null when Jira hides the email — never invent a fake address.
+      email: w.emailAddress || null
     }));
   } catch (err) {
     const status = err.response ? err.response.status : 'network error';
@@ -528,4 +80,52 @@ async function fetchWatchers(jiraBaseUrl, email, apiToken, issueKey) {
   }
 }
 
-module.exports = { postComment, buildCommentAdf, buildCommentAdfList, chunkAdfDocument, fetchWatchers, buildCommentsSection };
+/**
+ * Searches for Jira users by display name, username, or email.
+ *
+ * Requires "Browse users and groups" permission on the Jira instance.
+ * Returns an empty array (never throws) when the permission is missing (403).
+ *
+ * @param {string} jiraBaseUrl  e.g. "https://your-org.atlassian.net"
+ * @param {string} email        Jira account email (for Basic Auth)
+ * @param {string} apiToken     Jira API token
+ * @param {string} query        Search term — display name, username, or email fragment
+ * @returns {Promise<Array<{accountId: string, displayName: string, email: string|null}>>}
+ */
+async function searchUsers(jiraBaseUrl, email, apiToken, query) {
+  if (!query || !query.trim()) return [];
+  const url = `${jiraBaseUrl.replace(/\/$/, '')}/rest/api/3/user/search?query=${encodeURIComponent(query.trim())}`;
+  const auth = Buffer.from(`${email}:${apiToken}`).toString('base64');
+
+  try {
+    const res = await axios.get(url, {
+      headers: {
+        'Authorization': `Basic ${auth}`,
+        'Accept': 'application/json'
+      }
+    });
+    const users = Array.isArray(res.data) ? res.data : [];
+    return users.map(u => ({
+      accountId: u.accountId,
+      displayName: u.displayName,
+      email: u.emailAddress || null
+    }));
+  } catch (err) {
+    // 403 means "Browse users and groups" permission is missing — return empty
+    // rather than crashing the GUI typeahead.
+    if (err.response && err.response.status === 403) return [];
+    const status = err.response ? err.response.status : 'network error';
+    const detail = err.response ? JSON.stringify(err.response.data) : err.message;
+    throw new Error(`Jira searchUsers failed — ${status}: ${detail}`);
+  }
+}
+
+module.exports = {
+  postComment,
+  fetchWatchers,
+  searchUsers,
+  buildCommentAdf: adf.buildCommentAdf,
+  buildCommentAdfList: adf.buildCommentAdfList,
+  chunkAdfDocument: adf.chunkAdfDocument,
+  buildCommentsSection: adf.buildCommentsSection
+};

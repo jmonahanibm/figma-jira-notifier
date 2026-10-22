@@ -23,16 +23,24 @@
     <a href="https://github.com/tlutmer/figma-jira-notifier" target="_blank" rel="noopener noreferrer" class="gh-link">GitHub repo</a>
     <button class="btn-secondary" id="btnOpenSettings">Settings</button>
     <button class="btn-run" id="btnRunNow">Run now</button>
+    <button class="btn-wolves" id="btnWolvesTheme" style="display:none;" title="Go Wolves 🐺">🐺</button>
   </div>
 </header>
+<div class="wolves-tooth-band" aria-hidden="true"></div>
 
 <main class="main">
+
+  <!-- Hosted-mode notice (shown by app.js only when no local server is detected) -->
+  <div class="info-banner" id="hostedNotice" style="display:none;">
+    <strong>Hosted version:</strong> When opened on GitHub Pages, diffs run in-browser and require Jira CORS or a local server. For seamless automated background runs, clone the repo and run <code>npm start</code> (served at <code>http://localhost:3000</code>).
+  </div>
 
   <!-- Status bar -->
   <div class="status-bar" id="statusBar">
     <span>Last run: <strong id="lastRun">—</strong></span>
     <span>Next scheduled: <strong id="nextRun">—</strong></span>
     <span>Schedule: <strong id="scheduleDisplay">—</strong></span>
+    <span>Workspace: <strong id="workspaceDisplay">Local</strong></span>
   </div>
 
   <!-- Run results -->
@@ -85,6 +93,10 @@
           <div id="changesList" class="project-list">
             <div class="empty-state">No recent activity detected. Click "Run now" to diff.</div>
           </div>
+          <div id="exportActions" style="display:none; margin-top:12px;"></div>
+        </div>
+        <div class="section-footer" style="margin-top:12px; display:flex; justify-content:flex-end;">
+          <button type="button" class="btn-secondary" id="btnClearHistory" style="font-size:12px;">Clear history</button>
         </div>
       </div>
     </div>
@@ -104,13 +116,31 @@
     <div class="modal-body">
       <div id="settingsAlert" class="alert"></div>
       <form id="settingsForm">
+        <div style="font-size:13px; font-weight:600; margin-bottom:8px;">Workspace folder</div>
+        <p style="font-size:12px; color:#57606a; margin:0 0 8px;">
+          Configure a local path or synchronized team drive (SharePoint / OneDrive / Box Drive) to share project definitions and snapshot baselines with your team.
+        </p>
+        <div class="field">
+          <label for="dataDir">Shared workspace folder path</label>
+          <div style="display:flex; gap:8px;">
+            <input type="text" id="dataDir" name="dataDir" placeholder="e.g. C:\Users\username\Box\DesignChangelog (blank = local default)" style="flex:1;" />
+            <button type="button" class="btn-secondary" id="btnTestDataDir" style="white-space:nowrap; padding:6px 12px; font-size:12px;">Test folder</button>
+          </div>
+          <div id="dataDirStatus" style="font-size:12px; margin-top:4px;"></div>
+        </div>
+
+        <hr class="divider" style="margin-top:16px;" />
+        <div style="font-size:13px; font-weight:600; margin-bottom:8px;">Personal credentials & schedules</div>
+        <p style="font-size:12px; color:#57606a; margin:0 0 8px;">
+          Personal API tokens are saved in your local user profile (<code>~/.figma-jira-notifier/secrets.json</code>) and never committed to the shared folder.
+        </p>
         <div class="form-grid full" style="gap:12px;">
           <div class="field">
             <label for="figmaToken">Figma personal access token</label>
             <input type="password" id="figmaToken" name="figmaToken" placeholder="figd_…" autocomplete="off" />
           </div>
           <div class="field">
-            <label for="schedule">Cron schedule</label>
+            <label for="schedule">Default global cron schedule</label>
             <input type="text" id="schedule" name="schedule" placeholder="0 8 * * *" />
           </div>
           <div class="field">
@@ -124,6 +154,41 @@
           <div class="field">
             <label for="jiraApiToken">Jira API token</label>
             <input type="password" id="jiraApiToken" name="jiraApiToken" placeholder="Your Jira API token" autocomplete="off" />
+          </div>
+        </div>
+
+        <hr class="divider" style="margin-top:16px;" />
+        <div style="font-size:13px; font-weight:600; margin-bottom:10px;">Notification channels</div>
+        <div id="channelsCorsBanner" class="info-banner" style="display:none; margin-bottom:10px;">
+          <strong>Hosted mode:</strong> Slack and Teams webhooks require running locally via <code>npm start</code> to avoid browser CORS restrictions.
+        </div>
+        <div class="form-grid full" style="gap:12px;">
+          <div class="field" style="margin-top:0;">
+            <div class="toggle-container">
+              <label class="toggle-switch">
+                <input type="checkbox" id="channelJira" checked />
+                <span class="toggle-slider"></span>
+              </label>
+              <span class="toggle-label">Post comment to Jira</span>
+            </div>
+          </div>
+          <div class="field">
+            <label for="channelSlackUrl">Slack incoming webhook URL</label>
+            <input type="url" id="channelSlackUrl" name="channelSlackUrl" placeholder="https://hooks.slack.com/services/…" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="channelTeamsUrl">Microsoft Teams incoming webhook URL</label>
+            <input type="url" id="channelTeamsUrl" name="channelTeamsUrl" placeholder="https://outlook.office.com/webhook/…" autocomplete="off" />
+          </div>
+        </div>
+        <div id="channelsValidationMsg" class="alert" style="margin-top:8px;"></div>
+
+        <hr class="divider" style="margin-top:16px;" />
+        <div style="font-size:13px; font-weight:600; margin-bottom:10px;">Snapshot history</div>
+        <div class="form-grid full" style="gap:12px;">
+          <div class="field">
+            <label for="snapshotRetention">Number of snapshots to retain per project (1–50)</label>
+            <input type="number" id="snapshotRetention" name="snapshotRetention" min="1" max="50" value="7" style="width:80px;" />
           </div>
         </div>
       </form>
@@ -152,7 +217,10 @@
           <label for="modalFileKey">Figma URL</label>
           <input type="text" id="modalFileKey" placeholder="https://www.figma.com/design/…" />
         </div>
-        <input type="hidden" id="modalFileName" />
+        <div class="field">
+          <label for="modalFileName">File display name (auto-filled from URL)</label>
+          <input type="text" id="modalFileName" placeholder="My Figma file" />
+        </div>
         <div class="field">
           <label for="modalJiraKey">Jira ticket URL</label>
           <input type="text" id="modalJiraKey" placeholder="https://your-org.atlassian.net/browse/PROJ-123 or PROJ-123" />
@@ -166,6 +234,24 @@
             <span class="toggle-label">Include Figma comments in Jira notifications</span>
           </div>
         </div>
+        <div class="field" style="margin-top:6px;">
+          <div class="toggle-container">
+            <label class="toggle-switch">
+              <input type="checkbox" id="modalPostFigmaComment" checked />
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="toggle-label">Post changelog comment back to Figma after each run</span>
+          </div>
+        </div>
+        <div class="field" style="margin-top:6px;">
+          <label for="modalExportFormat">Export changelog document</label>
+          <select id="modalExportFormat">
+            <option value="none">Off (no export)</option>
+            <option value="md">Markdown (.md)</option>
+            <option value="html">HTML (.html)</option>
+            <option value="both">Both (.md and .html)</option>
+          </select>
+        </div>
       </div>
 
       <hr class="divider" />
@@ -178,6 +264,64 @@
         </div>
       </div>
       <div id="mentionRows"></div>
+
+      <details style="margin-top:16px;">
+        <summary style="cursor:pointer; font-size:13px; color:#57606a; user-select:none;">Advanced: Channel overrides for this project</summary>
+        <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
+          <p style="font-size:12px; color:#57606a; margin:0 0 6px;">Leave blank to use global settings. Set a value to override for this project only.</p>
+          <div class="field">
+            <div class="toggle-container">
+              <label class="toggle-switch">
+                <input type="checkbox" id="overrideJiraEnabled" />
+                <span class="toggle-slider"></span>
+              </label>
+              <span class="toggle-label">Override Jira channel</span>
+            </div>
+            <div id="overrideJiraRow" style="display:none; margin-top:6px;">
+              <div class="toggle-container">
+                <label class="toggle-switch">
+                  <input type="checkbox" id="overrideJira" checked />
+                  <span class="toggle-slider"></span>
+                </label>
+                <span class="toggle-label">Post Jira comment for this project</span>
+              </div>
+            </div>
+          </div>
+          <div class="field">
+            <label for="overrideSlackUrl">Override Slack webhook URL for this project</label>
+            <input type="url" id="overrideSlackUrl" placeholder="https://hooks.slack.com/services/… (blank = use global)" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="overrideTeamsUrl">Override Teams webhook URL for this project</label>
+            <input type="url" id="overrideTeamsUrl" placeholder="https://outlook.office.com/webhook/… (blank = use global)" autocomplete="off" />
+          </div>
+        </div>
+      </details>
+
+      <details style="margin-top:8px;">
+        <summary style="cursor:pointer; font-size:13px; color:#57606a; user-select:none;">Advanced: Custom schedule for this project</summary>
+        <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
+          <p style="font-size:12px; color:#57606a; margin:0 0 6px;">Leave blank to use the global cron schedule. Set a custom cron expression (e.g. <code>0 9 * * 1</code> for weekly on Mondays) to run this project on its own cadence.</p>
+          <div class="field">
+            <label for="modalSchedule">Custom cron schedule</label>
+            <input type="text" id="modalSchedule" placeholder="0 8 * * * (blank = use global)" />
+          </div>
+        </div>
+      </details>
+
+      <details style="margin-top:8px;">
+        <summary style="cursor:pointer; font-size:13px; color:#57606a; user-select:none;">Advanced: Noise filtering</summary>
+        <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
+          <div class="field">
+            <label for="modalExcludePages">Exclude pages (one per line, * wildcard allowed)</label>
+            <textarea id="modalExcludePages" rows="3" placeholder="Archive&#10;WIP*" style="font-family:monospace; font-size:12px; resize:vertical;"></textarea>
+          </div>
+          <div class="field">
+            <label for="modalExcludeFrames">Exclude frames (one per line, * wildcard allowed)</label>
+            <textarea id="modalExcludeFrames" rows="3" placeholder="_annotations&#10;DO NOT SHIP*" style="font-family:monospace; font-size:12px; resize:vertical;"></textarea>
+          </div>
+        </div>
+      </details>
     </div>
     <div class="modal-footer">
       <button type="button" class="btn-secondary" id="modalCancel">Cancel</button>
@@ -186,6 +330,6 @@
   </div>
 </div>
 
-<script src="app.js"></script>
+<script src="app.bundle.js"></script>
 </body>
 </html>
